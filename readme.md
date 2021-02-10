@@ -4,6 +4,8 @@ NES emulator written in rust.
 
 Following [this blog](https://bugzmanov.github.io/nes_ebook/chapter_1.html)
 
+[CPU ref](http://www.obelisk.me.uk/6502/reference.html)
+
 ## notes
 
 ### architecture
