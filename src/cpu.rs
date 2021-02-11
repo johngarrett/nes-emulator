@@ -1,3 +1,16 @@
+use std::collections::HashMap;
+use crate::opcodes;
+
+pub struct CPU {
+    pub register_a: u8,
+    pub register_x: u8,
+    pub register_y: u8,
+    pub status: u8,
+    // Track current position in the program
+    pub program_counter: u16,
+    memory: [u8; 0xFFFF]
+}
+
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub enum AddressingMode {
@@ -13,38 +26,9 @@ pub enum AddressingMode {
     NoneAddressing
 }
 
-
-pub struct CPU {
-    pub register_a: u8,
-    pub register_x: u8,
-    pub register_y: u8,
-    pub status: u8,
-    /*
-     * Track current position in the program
-     */
-    pub program_counter: u16,
-    memory: [u8; 0xFFFF]
-}
-
-impl CPU {
-    pub fn new() -> Self {
-        CPU {
-            register_a: 0,
-            register_x: 0,
-            register_y: 0,
-            status: 0,
-            program_counter: 0,
-            memory: [0; 0xFFFF]
-        }
-    }
-
-    fn mem_read(&self, addr: u16) -> u8 {
-        self.memory[addr as usize]
-    }
-
-    fn mem_write(&mut self, addr: u16, data: u8) {
-        self.memory[addr as usize] = data;
-    }
+trait Mem {
+    fn mem_read(&self, addr: u16) -> u8;
+    fn mem_write(&mut self, addr: u16, data: u8);
 
     /**
      * CPU uses Little-Endian
@@ -69,6 +53,29 @@ impl CPU {
         let lo = (data & 0xff) as u8;
         self.mem_write(pos, lo);
         self.mem_write(pos + 1, hi);
+    }
+}
+
+impl Mem for CPU {
+    fn mem_read(&self, addr: u16) -> u8 {
+        self.memory[addr as usize]
+    }
+
+    fn mem_write(&mut self, addr: u16, data: u8) {
+        self.memory[addr as usize] = data;
+    }
+}
+
+impl CPU {
+    pub fn new() -> Self {
+        CPU {
+            register_a: 0,
+            register_x: 0,
+            register_y: 0,
+            status: 0,
+            program_counter: 0,
+            memory: [0; 0xFFFF]
+        }
     }
 
     pub fn reset(&mut self) {
@@ -216,33 +223,35 @@ impl CPU {
          *  3. Execute the instruction
          *  4. Repeat the cycle
          */
-        loop {
-            let opscode = self.mem_read(self.program_counter); 
-            self.program_counter += 1;
+        let ref opcodes: HashMap<u8, &'static opcodes::OpCode> = *opcodes::OPCODES_MAP;
 
-            match opscode {
-                 // BRK
-                0x00 => return,
-                 // LDA immediate
-                0xA9 => {
-                    self.lda(&AddressingMode::Immediate);
-                    self.program_counter += 1;
+        loop {
+            let code = self.mem_read(self.program_counter); 
+            self.program_counter += 1;
+            let program_counter_state = self.program_counter;
+
+            let opcode = opcodes.get(&code).expect(&format!("OpCode {:x} is not recognized", code));
+
+            match code {
+                /* LDA */
+                 0xa9 | 0xa5 | 0xb5 | 0xad | 0xbd | 0xb9 | 0xa1 | 0xb1 => {
+                    self.lda(&opcode.mode);
                 }
-                 // LDA zeropage
-                0xA5 => {
-                    self.lda(&AddressingMode::ZeroPage);
-                    self.program_counter += 1;
+
+                /* STA */
+                0x85 | 0x95 | 0x8d | 0x9d | 0x99 | 0x81 | 0x91 => {
+                    self.sta(&opcode.mode);
                 }
-                 // LDA absolute
-                0xAD => {
-                    self.lda(&AddressingMode::Absolute);
-                    self.program_counter += 2;
-                }
-                 // TAX
+                
                 0xAA => self.tax(),
-                // INX
-                0xE8 => self.inx(),
-                _ => todo!()
+                0xe8 => self.inx(),
+                0x00 => return,
+                _ => todo!(),
+            }
+
+            // if program_counter hasn't been updated
+            if program_counter_state == self.program_counter {
+                self.program_counter += (opcode.len - 1) as u16;
             }
         }
     }
@@ -272,13 +281,11 @@ mod test {
     }
 
     #[test]
-    fn test_0xaa_tax_move_a_to_x() {
+     fn test_0xaa_tax_move_a_to_x() {
         let mut cpu = CPU::new();
-        cpu.register_a = 10;
-        // LDX
-        // BRK
-        cpu.load_and_run(vec![0xaa, 0x00]);
-        assert_eq!(cpu.register_x, 10);
+        cpu.load_and_run(vec![0xa9, 0x0A,0xaa, 0x00]);
+
+        assert_eq!(cpu.register_x, 10)
     }
 
     #[test]
