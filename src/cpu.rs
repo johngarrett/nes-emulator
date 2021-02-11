@@ -233,19 +233,248 @@ impl CPU {
             let opcode = opcodes.get(&code).expect(&format!("OpCode {:x} is not recognized", code));
 
             match code {
-                /* LDA */
-                 0xa9 | 0xa5 | 0xb5 | 0xad | 0xbd | 0xb9 | 0xa1 | 0xb1 => {
+                0xa9 | 0xa5 | 0xb5 | 0xad | 0xbd | 0xb9 | 0xa1 | 0xb1 => {
                     self.lda(&opcode.mode);
+                }
+
+                0xAA => self.tax(),
+                0xe8 => self.inx(),
+                0x00 => return,
+
+                /* CLD */ 0xd8 => self.status.remove(CpuFlags::DECIMAL_MODE),
+
+                /* CLI */ 0x58 => self.status.remove(CpuFlags::INTERRUPT_DISABLE),
+
+                /* CLV */ 0xb8 => self.status.remove(CpuFlags::OVERFLOW),
+
+                /* CLC */ 0x18 => self.clear_carry_flag(),
+
+                /* SEC */ 0x38 => self.set_carry_flag(),
+
+                /* SEI */ 0x78 => self.status.insert(CpuFlags::INTERRUPT_DISABLE),
+
+                /* SED */ 0xf8 => self.status.insert(CpuFlags::DECIMAL_MODE),
+
+                /* PHA */ 0x48 => self.stack_push(self.register_a),
+
+                /* PLA */
+                0x68 => {
+                    self.pla();
+                }
+
+                /* PHP */
+                0x08 => {
+                    self.php();
+                }
+
+                /* PLP */
+                0x28 => {
+                    self.plp();
+                }
+
+                /* ADC */
+                0x69 | 0x65 | 0x75 | 0x6d | 0x7d | 0x79 | 0x61 | 0x71 => {
+                    self.adc(&opcode.mode);
+                }
+
+                /* SBC */
+                0xe9 | 0xe5 | 0xf5 | 0xed | 0xfd | 0xf9 | 0xe1 | 0xf1 => {
+                    self.sbc(&opcode.mode);
+                }
+
+                /* AND */
+                0x29 | 0x25 | 0x35 | 0x2d | 0x3d | 0x39 | 0x21 | 0x31 => {
+                    self.and(&opcode.mode);
+                }
+
+                /* EOR */
+                0x49 | 0x45 | 0x55 | 0x4d | 0x5d | 0x59 | 0x41 | 0x51 => {
+                    self.eor(&opcode.mode);
+                }
+
+                /* ORA */
+                0x09 | 0x05 | 0x15 | 0x0d | 0x1d | 0x19 | 0x01 | 0x11 => {
+                    self.ora(&opcode.mode);
+                }
+
+                /* LSR */ 0x4a => self.lsr_accumulator(),
+
+                /* LSR */
+                0x46 | 0x56 | 0x4e | 0x5e => {
+                    self.lsr(&opcode.mode);
+                }
+
+                /*ASL*/ 0x0a => self.asl_accumulator(),
+
+                /* ASL */
+                0x06 | 0x16 | 0x0e | 0x1e => {
+                    self.asl(&opcode.mode);
+                }
+
+                /*ROL*/ 0x2a => self.rol_accumulator(),
+
+                /* ROL */
+                0x26 | 0x36 | 0x2e | 0x3e => {
+                    self.rol(&opcode.mode);
+                }
+
+                /* ROR */ 0x6a => self.ror_accumulator(),
+
+                /* ROR */
+                0x66 | 0x76 | 0x6e | 0x7e => {
+                    self.ror(&opcode.mode);
+                }
+
+                /* INC */
+                0xe6 | 0xf6 | 0xee | 0xfe => {
+                    self.inc(&opcode.mode);
+                }
+
+                /* INY */
+                0xc8 => self.iny(),
+
+                /* DEC */
+                0xc6 | 0xd6 | 0xce | 0xde => {
+                    self.dec(&opcode.mode);
+                }
+
+                /* DEX */
+                0xca => {
+                    self.dex();
+                }
+
+                /* DEY */
+                0x88 => {
+                    self.dey();
+                }
+
+                /* CMP */
+                0xc9 | 0xc5 | 0xd5 | 0xcd | 0xdd | 0xd9 | 0xc1 | 0xd1 => {
+                }
+
+                /* CPY */
+                0xc0 | 0xc4 | 0xcc => {
+                }
+
+                /* CPX */
+                0xe0 | 0xe4 | 0xec => {} ,
+
+                /* JMP Absolute */
+                0x4c => {
+                }
+
+                /* JMP Indirect */
+                0x6c => {
+                }
+
+                /* JSR */
+                0x20 => {
+                }
+
+                /* RTS */
+                0x60 => {
+                }
+
+                /* RTI */
+                0x40 => {
+                }
+
+                /* BNE */
+                0xd0 => {
+                    self.branch(!self.status.contains(CpuFlags::ZERO));
+                }
+
+                /* BVS */
+                0x70 => {
+                    self.branch(self.status.contains(CpuFlags::OVERFLOW));
+                }
+
+                /* BVC */
+                0x50 => {
+                    self.branch(!self.status.contains(CpuFlags::OVERFLOW));
+                }
+
+                /* BPL */
+                0x10 => {
+                    self.branch(!self.status.contains(CpuFlags::NEGATIV));
+                }
+
+                /* BMI */
+                0x30 => {
+                    self.branch(self.status.contains(CpuFlags::NEGATIV));
+                }
+
+                /* BEQ */
+                0xf0 => {
+                    self.branch(self.status.contains(CpuFlags::ZERO));
+                }
+
+                /* BCS */
+                0xb0 => {
+                    self.branch(self.status.contains(CpuFlags::CARRY));
+                }
+
+                /* BCC */
+                0x90 => {
+                    self.branch(!self.status.contains(CpuFlags::CARRY));
+                }
+
+                /* BIT */
+                0x24 | 0x2c => {
+                    self.bit(&opcode.mode);
                 }
 
                 /* STA */
                 0x85 | 0x95 | 0x8d | 0x9d | 0x99 | 0x81 | 0x91 => {
                     self.sta(&opcode.mode);
                 }
-                
-                0xAA => self.tax(),
-                0xe8 => self.inx(),
-                0x00 => return,
+
+                /* STX */
+                0x86 | 0x96 | 0x8e => {
+                }
+
+                /* STY */
+                0x84 | 0x94 | 0x8c => {
+                }
+
+                /* LDX */
+                0xa2 | 0xa6 | 0xb6 | 0xae | 0xbe => {
+                    self.ldx(&opcode.mode);
+                }
+
+                /* LDY */
+                0xa0 | 0xa4 | 0xb4 | 0xac | 0xbc => {
+                    self.ldy(&opcode.mode);
+                }
+
+                /* NOP */
+                0xea => {
+                }
+
+                /* TAY */
+                0xa8 => {
+                }
+
+                /* TSX */
+                0xba => {
+                    todo!()
+                }
+
+                /* TXA */
+                0x8a => {
+                    todo!()
+                }
+
+                /* TXS */
+                0x9a => {
+                    todo!()
+                }
+
+                /* TYA */
+                0x98 => {
+                    todo!()
+                }
+
                 _ => todo!(),
             }
 
