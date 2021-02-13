@@ -1,11 +1,36 @@
 use std::collections::HashMap;
 use crate::opcodes;
 
+bitflags! {
+    /// # Status Register (P) http://wiki.nesdev.com/w/index.php/Status_flags
+    ///
+    ///  7 6 5 4 3 2 1 0
+    ///  N V _ B D I Z C
+    ///  | |   | | | | +--- Carry Flag
+    ///  | |   | | | +----- Zero Flag
+    ///  | |   | | +------- Interrupt Disable
+    ///  | |   | +--------- Decimal Mode (not used on NES)
+    ///  | |   +----------- Break Command
+    ///  | +--------------- Overflow Flag
+    ///  +----------------- Negative Flag
+    ///
+    pub struct CpuFlags: u8 {
+        const CARRY             = 0b00000001;
+        const ZERO              = 0b00000010;
+        const INTERRUPT_DISABLE = 0b00000100;
+        const DECIMAL_MODE      = 0b00001000;
+        const BREAK             = 0b00010000;
+        const BREAK2            = 0b00100000;
+        const OVERFLOW          = 0b01000000;
+        const NEGATIV           = 0b10000000;
+    }
+}
+
 pub struct CPU {
     pub register_a: u8,
     pub register_x: u8,
     pub register_y: u8,
-    pub status: u8,
+    pub status: CpuFlags,
     // Track current position in the program
     pub program_counter: u16,
     memory: [u8; 0xFFFF]
@@ -72,7 +97,7 @@ impl CPU {
             register_a: 0,
             register_x: 0,
             register_y: 0,
-            status: 0,
+            status: CpuFlags::from_bits_truncate(0b100100),
             program_counter: 0,
             memory: [0; 0xFFFF]
         }
@@ -81,11 +106,19 @@ impl CPU {
     pub fn reset(&mut self) {
         self.register_a = 0;
         self.register_x = 0;
-        self.status = 0;
+        self.status = CpuFlags::from_bits_truncate(0b100100);
 
         // load should load a program into PRG ROM space 
         // and save the reference to the code in 0xFFC
         self.program_counter = self.mem_read_u16(0xFFC);
+    }
+
+    fn set_carry_flag(&mut self) {
+        self.status.insert(CpuFlags::CARRY)
+    }
+
+    fn clear_carry_flag(&mut self) {
+        self.status.remove(CpuFlags::CARRY)
     }
 
     pub fn load(&mut self, program: Vec<u8>) {
@@ -98,6 +131,57 @@ impl CPU {
         self.load(program);
         self.reset();
         self.run();
+    }
+
+    fn lsr_accumulator(&mut self) {
+        let mut data = self.register_a;
+        if data & 1 == 1 {
+            self.set_carry_flag();
+        } else {
+            self.clear_carry_flag();
+        }
+        data = data >> 1;
+        self.set_register_a(data)
+    }
+
+    fn branch(&mut self, condition: bool) {
+        if condition {
+            let jump: i8 = self.mem_read(self.program_counter) as i8;
+            let jump_addr = self
+                .program_counter
+                .wrapping_add(1)
+                .wrapping_add(jump as u16);
+
+            self.program_counter = jump_addr;
+        }
+    }
+
+    fn add_to_register_a(&mut self, value: u8) {
+        let sum = self.register_a as u16
+            + value as u16
+            + (if self.status.contains(CpuFlags::CARRY) {
+                1
+            } else {
+                0
+            }) as u16;
+
+        let carry = sum > 0xff;
+
+        if carry {
+            self.status.insert(CpuFlags::CARRY);
+        } else {
+            self.status.remove(CpuFlags::CARRY);
+        }
+
+        let result = sum as u8;
+
+        if (value ^ result) & (result ^ self.register_a) & 0x80 != 0 {
+            self.status.insert(CpuFlags::OVERFLOW);
+        } else {
+            self.status.remove(CpuFlags::OVERFLOW);
+        }
+
+        self.set_register_a(result);
     }
 
     /**
@@ -160,6 +244,21 @@ impl CPU {
         }
     }
 
+    fn ldy(&self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr);
+
+        self.register_y = value;
+        self.update_zero_and_negative_flags(self.register_y);
+    }
+
+    fn ldx(&mut self, mode: &AddressingMode) { 
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr);
+
+        self.register_x = value;
+        self.update_zero_and_negative_flags(self.register_x);
+    }
     /*
      * LDA (0xA9)
      * Loads a byte of memory into the accumulator setting the zero and negative flags as appropriate.
@@ -167,15 +266,92 @@ impl CPU {
     fn lda(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
         let value = self.mem_read(addr);
-
-        self.register_a = value;
-        self.update_zero_and_negative_flags(self.register_a);
+        self.set_register_a(value);
     }
 
     fn sta(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
         self.mem_write(addr, self.register_a);
     }
+
+    fn set_register_a(&mut self, value: u8) {
+        self.register_a = value;
+        self.update_zero_and_negative_flags(self.register_a);
+    }
+
+    fn and(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr);
+        self.set_register_a(self.register_a & value);
+    }
+
+    fn eor(&mut self, mode: &AddressingMode) { 
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr);
+
+        self.set_register_a(value ^ self.register_a);
+    }
+
+    fn ora(&mut self, mode: &AddressingMode) { 
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr);
+        self.set_register_a(value | self.register_a);
+    }
+
+    fn iny(&mut self) { 
+        self.register_y = self.register_y.wrapping_add(1);
+        self.update_zero_and_negative_flags(self.register_y);
+    }
+
+    pub fn inx(&mut self) {
+        self.register_x = self.register_x.wrapping_add(1);
+        self.update_zero_and_negative_flags(self.register_x);
+    }
+
+    fn sbc(&mut self, mode: &AddressingMode) { 
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr);
+        self.add_to_register_a(((value as i8).wrapping_neg().wrapping_sub(1)) as u8);
+    }
+
+    fn adc(&mut self, mode: &AddressingMode) { 
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr);
+        self.add_to_register_a(value);
+    }
+
+    fn asl(&mut self, mode: &AddressingMode) { todo!() }
+    fn rol(&mut self, mode: &AddressingMode) { todo!() }
+    fn ror(&mut self, mode: &AddressingMode) { todo!() }
+    fn inc(&mut self, mode: &AddressingMode) { todo!() }
+    fn dey(&mut self) { todo!() }
+    fn dex(&mut self) { todo!() }
+    fn dec(&mut self, mode: &AddressingMode) { todo!() }
+    fn pla(&mut self) { todo!() }
+    fn plp(&mut self) { todo!() }
+    fn php(&mut self) { todo!() }
+    fn bit(&mut self, condition: bool) { todo!() }
+    fn compare(&mut self, mode: &AddressingMode, compare_with: u8) { todo!() }
+
+    fn lsr(&mut self, mode: &AddressingMode) -> u8 {
+        let addr = self.get_operand_address(mode);
+        let mut data = self.mem_read(addr);
+        if data & 1 == 1 {
+            self.set_carry_flag();
+        } else {
+            self.clear_carry_flag();
+        }
+        data = data >> 1;
+        self.mem_write(addr, data);
+        self.update_zero_and_negative_flags(data);
+        data
+    }
+
+    fn rol_accumulator(&mut self) { todo!() }
+    fn ror_accumulator(&mut self) { todo!() }
+    fn stack_push_u16(&mut self, data: u8) { todo!() }
+    fn stack_pop_u16(&mut self, data: u8) { todo!() }
+    fn asl_accumulator(&mut self) { todo!() }
 
     /**
      * TAX (0xAA)
@@ -186,29 +362,32 @@ impl CPU {
         self.update_zero_and_negative_flags(self.register_x);
     }
 
-    /**
-     * INX (0xE8)
-     * Adds one to the X register setting the zero and negative flags as appropriate.
-     */
-    pub fn inx(&mut self) {
-        self.register_x = self.register_x.wrapping_add(1);
-        self.update_zero_and_negative_flags(self.register_x);
-    }
-
     fn update_zero_and_negative_flags(&mut self, result: u8) {
         // set zero flag
         // xxxx_xx{ZERO_FLAG}x
         if result == 0 {
-            self.status = self.status | 0b0000_0010;
+            self.status.insert(CpuFlags::ZERO);
+            //self.status = self.status | 0b0000_0010;
         } else {
-            self.status = self.status & 0b1111_1101;
+            self.status.remove(CpuFlags::ZERO);
+            //self.status = self.status & 0b1111_1101;
         }
 
         // set negaive flag (if bit 7 of A is set)
-        if result & 0b1000_0000 != 0 {
-            self.status = self.status | 0b1000_0000;
+        //if result & 0b1000_0000 != 0 {
+        if result >> 7 == 1 {
+            self.status.insert(CpuFlags::NEGATIV);
+            //self.status = self.status | 0b1000_0000;
         } else {
-            self.status = self.status & 0b0111_1111;
+            //self.status = self.status & 0b0111_1111;
+            self.status.remove(CpuFlags::NEGATIV);
+        }
+    }
+    fn update_negative_flags(&mut self, result: u8) {
+        if result >> 7 == 1 {
+            self.status.insert(CpuFlags::NEGATIV)
+        } else {
+            self.status.remove(CpuFlags::NEGATIV)
         }
     }
 
